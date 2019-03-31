@@ -1,0 +1,8 @@
+/build
+/output
+*.d
+*.o
+*.exe
+*.ppm
+*.make
+Makefile
