@@ -1,6 +1,7 @@
 workspace "RayTracing"
     architecture "x64"
     startproject "RayTracing"
+    location "proj"
 
     configurations {
         "Debug",

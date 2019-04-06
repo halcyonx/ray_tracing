@@ -1,20 +1,28 @@
 #pragma once
 
 #include "Hitable.h"
+#include "Material.h"
 
 class Sphere : public Hitable
 {
 public:
     Sphere() {}
-    Sphere(const vec3 & c, float r)
+    Sphere(const vec3 & c, float r, Material * m)
         : center(c)
         , radius(r)
+        , material(m)
     {}
+
+    ~Sphere()
+    {
+        delete material;
+    }
 
     bool hit(const ray & r, float t_min, float t_max, hit_record & rec) const override;
 
     vec3 center;
     float radius;
+    Material * material;
 };
 
 bool Sphere::hit(const ray & r, float t_min, float t_max, hit_record & rec) const
@@ -34,6 +42,7 @@ bool Sphere::hit(const ray & r, float t_min, float t_max, hit_record & rec) cons
         rec.t = t;
         rec.p = r.point_at_parameter(rec.t);
         rec.normal = N;
+        rec.material = material;
         return true;
     }
 
