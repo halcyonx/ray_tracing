@@ -4,7 +4,7 @@
 
 const float PI = 3.14159265f;
 
-vec3 random_in_unit_disk()
+inline vec3 random_in_unit_disk()
 {
     vec3 p;
     do
@@ -35,11 +35,11 @@ public:
         vertical = 2.f * half_height*focus_dist*v;
     }
 
-    inline ray get_ray(float u, float v)
+    inline ray get_ray(float s, float t)
     {
         vec3 rd = lens_radius * random_in_unit_disk();
         vec3 offset = u * rd.x() + v * rd.y();
-        return ray(origin + offset, left_lower_corner + u * horizontal + v * vertical - origin - offset);
+        return ray(origin + offset, left_lower_corner + s * horizontal + t * vertical - origin - offset);
     }
 
     vec3 left_lower_corner;

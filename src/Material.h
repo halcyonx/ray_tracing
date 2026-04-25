@@ -1,13 +1,16 @@
 #pragma once
 
 #include "Hitable.h"
+#include <random>
 
-float get_rand()
+inline float get_rand()
 {
-    return static_cast <float> (rand()) / static_cast <float> (RAND_MAX);
+    thread_local std::mt19937 rng{std::random_device{}()};
+    thread_local std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    return dist(rng);
 }
 
-vec3 random_in_unit_sphere()
+inline vec3 random_in_unit_sphere()
 {
     vec3 p;
     do
@@ -19,12 +22,12 @@ vec3 random_in_unit_sphere()
     return p;
 }
 
-vec3 reflect(const vec3 & v, const vec3 & n)
+inline vec3 reflect(const vec3 & v, const vec3 & n)
 {
     return v - 2.0f * dot(v, n) * n;
 }
 
-bool refract(const vec3 & v, const vec3 n, float ni_over_nt, vec3 & refracted)
+inline bool refract(const vec3 & v, const vec3 n, float ni_over_nt, vec3 & refracted)
 {
     vec3 uv = unit_vec(v);
     float dt = dot(uv, n);
@@ -33,11 +36,11 @@ bool refract(const vec3 & v, const vec3 n, float ni_over_nt, vec3 & refracted)
         refracted = ni_over_nt*(uv - n*dt) - n*sqrt(discriminant);
         return true;
     }
-    else 
+    else
         return false;
 }
 
-float schlick(float cosine, float ref_idx)
+inline float schlick(float cosine, float ref_idx)
 {
     float r0 = (1-ref_idx) / (1+ref_idx);
     r0 = r0*r0;
