@@ -5,6 +5,7 @@
 #include "Sphere.h"
 #include "Material.h"
 #include "HitableList.h"
+#include "BVH.h"
 #include "Camera.h"
 #include <limits>
 #include <chrono>
@@ -106,11 +107,11 @@ void init_random_scene(HitableList & world)
     std::cout << "Random scene initialized\n";
 }
 
-int nx = 200;
-int ny = 100;
-int ns = 100;
+int nx = 1024;
+int ny = 768;
+int ns = 50;
 
-void do_job(uint8_t * data, HitableList & world, Camera & camera, int from, int to)
+void do_job(uint8_t * data, const Hitable & world, Camera & camera, int from, int to)
 {
     for (int j = from; j < from + to; j++)
     {
@@ -155,26 +156,30 @@ int main(int argc, char const *argv[])
 
     Camera camera(lookfrom, lookat, vec3{0, 1, 0}, 45, float(nx)/float(ny), aperture, dist_to_focus);
 
-    HitableList world;
-    init_random_scene(world);
+    HitableList world_list;
+    init_random_scene(world_list);
+    BVHNode world(world_list.list, 0, static_cast<int>(world_list.list.size()));
 
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    const int CORES = 4;
+    const int CORES = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    std::cout << "Using " << CORES << " threads\n";
 
     int step = ny / CORES;
-    std::thread jobs[CORES];
+    std::vector<std::thread> jobs;
+    jobs.reserve(CORES);
     for (int i = 0; i < CORES; i++)
     {
-        jobs[i] = std::thread([&]
-        (int k)
+        int from  = i * step;
+        int count = (i == CORES - 1) ? (ny - from) : step;
+        jobs.emplace_back([&, from, count]()
         {
-            do_job(data.data(), world, camera, k * step, step);
-        }, i);
+            do_job(data.data(), world, camera, from, count);
+        });
     }
 
-    for (int i = 0; i < CORES; i++)
+    for (auto & t : jobs)
     {
-        jobs[i].join();
+        t.join();
     }
 
     flip(data.data(), nx, ny, 4);

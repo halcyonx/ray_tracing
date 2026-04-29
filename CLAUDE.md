@@ -15,8 +15,10 @@ PNG via `stb_image_write`. Rendering is parallelized across a fixed pool of thre
 src/                 All header-only ray tracer code plus main.cpp
   Vec.h              Templated Vec3<T>; `using vec3 = Vec3<float>`
   Ray.h              Templated Ray<T>; `using ray = Ray<float>`
-  Hitable.h          `Hitable` interface, `hit_record` POD
+  AABB.h             Axis-Aligned Bounding Box (`struct AABB`) + `surrounding_box()` helper
+  Hitable.h          `Hitable` interface, `hit_record` POD; includes AABB.h
   HitableList.h      Container of `Hitable::Ptr` (unique_ptr) with templated `add<T>(args...)`
+  BVH.h              `BVHNode : Hitable`; builds BVH tree from a vector of hitables
   Sphere.h           Sphere primitive; holds a `std::shared_ptr<Material>`
   Material.h         `Material` interface + `Lambertian`, `Metal`, `Dielectric`;
                      also defines free helpers `get_rand`, `random_in_unit_sphere`,
@@ -59,10 +61,10 @@ The `output/` directory holds curated reference images and is not the runtime ta
 
 Configuration lives as globals near the top of `main.cpp`:
 
-- `nx`, `ny` — image dimensions (currently 200×100).
-- `ns` — samples per pixel (currently 100).
-- `CORES` — fixed at 4 inside `main`; the printed `std::thread::hardware_concurrency()`
-  is informational only and is **not** used to size the thread pool.
+- `nx`, `ny` — image dimensions (currently 1024×768).
+- `ns` — samples per pixel (currently 50).
+- `CORES` — set to `std::thread::hardware_concurrency()` inside `main`; uses all
+  available hardware threads.
 - Camera position, FOV (45°), aperture (0.1), focus distance (10.0) are hardcoded in
   `main`.
 - Max ray bounce depth is hardcoded to 50 in `color()`.
@@ -74,12 +76,17 @@ collides with a glibc macro from `<math.h>` and was renamed.)
 ## Architecture & Conventions
 
 ### Class structure
-- `Hitable` is the abstract base for scene primitives (`hit(...)` returns the closest
-  intersection in `[t_min, t_max]` via a `hit_record`).
+- `Hitable` is the abstract base for scene primitives. Two pure virtuals: `hit(...)`
+  returns the closest intersection in `[t_min, t_max]` via a `hit_record`, and
+  `bounding_box(AABB&)` returns the object's AABB.
 - `Material` is the abstract base for shading; `scatter` produces an outgoing ray and
   attenuation. The three concrete materials are `Lambertian`, `Metal`, `Dielectric`.
 - `HitableList::add<T>(args...)` perfect-forwards to `new T(...)` and stores in a
-  `vector<unique_ptr<Hitable>>`. Use this rather than constructing primitives directly.
+  `vector<unique_ptr<Hitable>>`. Use this to build scenes; the list is then consumed
+  by `BVHNode` construction.
+- `BVHNode` takes `std::vector<Hitable::Ptr>&` and **moves** all items into the tree.
+  After construction, the source vector contains nullptrs. The tree sorts objects by
+  alternating axes (x/y/z per depth level) for a balanced hierarchy.
 
 ### Memory ownership
 - `Sphere` holds a `std::shared_ptr<Material>`; construct via `std::make_shared<...>`
@@ -106,16 +113,18 @@ collides with a glibc macro from `<math.h>` and was renamed.)
 
 ## Threading Model
 
-`main` partitions the image into `CORES` horizontal stripes of `ny / CORES` rows and
-spawns one `std::thread` per stripe running `do_job`. Each thread writes to disjoint
-rows of the shared `data` buffer, so no synchronization is needed. After joining, the
-buffer is flipped vertically (`flip`) before being passed to `stbi_write_png`.
+`main` partitions the image into `CORES` horizontal stripes and spawns one
+`std::thread` per stripe running `do_job`. `CORES` equals
+`std::thread::hardware_concurrency()`. The last thread receives any remainder rows
+(`ny - (CORES-1)*step`), so all rows are always rendered regardless of divisibility.
+Each thread writes to disjoint rows of the shared `data` buffer, so no synchronization
+is needed. After joining, the buffer is flipped vertically (`flip`) before being passed
+to `stbi_write_png`.
 
 Caveats to keep in mind when modifying:
-- `get_rand()` is now thread-safe (per-thread `std::mt19937`). Output varies between
-  runs because each thread seeds from `std::random_device`.
-- If `ny % CORES != 0`, the bottom rows are not rendered. Preserve divisibility or
-  fix the partitioning explicitly.
+- `get_rand()` is thread-safe (per-thread `std::mt19937`). Output varies between runs
+  because each thread seeds from `std::random_device`.
+- `do_job` takes `const Hitable&`, not `HitableList&` — pass the `BVHNode` directly.
 - Materials are shared read-only across threads via `Sphere::material`
   (`std::shared_ptr<Material>`).
 

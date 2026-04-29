@@ -15,11 +15,18 @@ public:
     {}
 
     bool hit(const ray & r, float t_min, float t_max, hit_record & rec) const override;
+    bool bounding_box(AABB & box) const override;
 
     vec3 center;
     float radius;
     std::shared_ptr<Material> material;
 };
+
+inline bool Sphere::bounding_box(AABB & box) const
+{
+    box = AABB(center - vec3(radius), center + vec3(radius));
+    return true;
+}
 
 inline bool Sphere::hit(const ray & r, float t_min, float t_max, hit_record & rec) const
 {
