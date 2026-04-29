@@ -5,13 +5,16 @@
 #include "Sphere.h"
 #include "Material.h"
 #include "HitableList.h"
+#include "BVH.h"
 #include "Camera.h"
 #include <limits>
 #include <chrono>
 #include <algorithm>
 #include <thread>
+#include <memory>
+#include <vector>
 
-const float MAXFLOAT = std::numeric_limits<short>::max();
+const float T_MAX = std::numeric_limits<float>::max();
 
 void flip(void *image, int w, int h, int bytes_per_pixel)
 {
@@ -43,7 +46,7 @@ vec3 color(const ray & r, const Hitable & world, int depth)
 {
     hit_record rec;
 
-    if (world.hit(r, 0.001f, MAXFLOAT, rec))
+    if (world.hit(r, 0.001f, T_MAX, rec))
     {
         ray scattered;
         vec3 attenuation;
@@ -66,10 +69,8 @@ vec3 color(const ray & r, const Hitable & world, int depth)
 
 void init_random_scene(HitableList & world)
 {
-    int n = 500;
-    world.add<Sphere>(vec3{0.f, -1000.f, 0.f}, 1000.f, new Lambertian(vec3{0.5f, 0.5f, 0.5f}));
+    world.add<Sphere>(vec3{0.f, -1000.f, 0.f}, 1000.f, std::make_shared<Lambertian>(vec3{0.5f, 0.5f, 0.5f}));
 
-    int i = 1;
     for (int a = -11; a < 11; a++)
     {
         for (int b = -11; b < 11; b++)
@@ -80,41 +81,37 @@ void init_random_scene(HitableList & world)
             if ((center - vec3(4.f, 0.2f, 0.f)).length() > 0.9f)
             {
                 if (choose_material < 0.8)
-                {  
+                {
                     // diffuse
-                    world.add<Sphere>(center, 0.2, new Lambertian(vec3(get_rand()*get_rand(), get_rand()*get_rand(), get_rand()*get_rand())));
+                    world.add<Sphere>(center, 0.2f, std::make_shared<Lambertian>(vec3(get_rand()*get_rand(), get_rand()*get_rand(), get_rand()*get_rand())));
                 }
                 else if (choose_material < 0.95)
-                { 
+                {
                     // metal
-                    world.add<Sphere>(center, 0.2,
-                            new Metal(vec3(0.5*(1 + get_rand()), 0.5*(1 + get_rand()), 0.5*(1 + get_rand())),  0.5*get_rand()));
+                    world.add<Sphere>(center, 0.2f,
+                            std::make_shared<Metal>(vec3(0.5f*(1 + get_rand()), 0.5f*(1 + get_rand()), 0.5f*(1 + get_rand())),  0.5f*get_rand()));
                 }
                 else
-                {  
+                {
                     // glass
-                    world.add<Sphere>(center, 0.2, new Dielectric(1.5));
+                    world.add<Sphere>(center, 0.2f, std::make_shared<Dielectric>(1.5f));
                 }
             }
         }
     }
 
-    world.add<Sphere>(vec3(0, 1, 0), 1.0, new Dielectric(1.5));
-    world.add<Sphere>(vec3(-4, 1, 0), 1.0, new Lambertian(vec3(0.4, 0.2, 0.1)));
-    world.add<Sphere>(vec3(4, 1, 0), 1.0, new Metal(vec3(0.7, 0.6, 0.5), 0.0));
+    world.add<Sphere>(vec3(0, 1, 0), 1.0f, std::make_shared<Dielectric>(1.5f));
+    world.add<Sphere>(vec3(-4, 1, 0), 1.0f, std::make_shared<Lambertian>(vec3(0.4f, 0.2f, 0.1f)));
+    world.add<Sphere>(vec3(4, 1, 0), 1.0f, std::make_shared<Metal>(vec3(0.7f, 0.6f, 0.5f), 0.0f));
 
     std::cout << "Random scene initialized\n";
 }
 
-// int nx = 1920;
-// int ny = 1080;
-// int ns = 200;
+int nx = 1024;
+int ny = 768;
+int ns = 50;
 
-int nx = 200;
-int ny = 100;
-int ns = 100;
-
-void do_job(uint8_t * data, HitableList & world, Camera & camera, int from, int to)
+void do_job(uint8_t * data, const Hitable & world, Camera & camera, int from, int to)
 {
     for (int j = from; j < from + to; j++)
     {
@@ -127,7 +124,6 @@ void do_job(uint8_t * data, HitableList & world, Camera & camera, int from, int 
                 float v = static_cast<float>(j + get_rand()) / static_cast<float>(ny);
 
                 ray r = camera.get_ray(u, v);
-                vec3 p = r.point_at_parameter(2.0f);
                 col += color(r, world, 0);
             }
 
@@ -149,49 +145,45 @@ void do_job(uint8_t * data, HitableList & world, Camera & camera, int from, int 
 
 int main(int argc, char const *argv[])
 {
-    uint8_t * data = new uint8_t [nx * ny * 4];
+    std::vector<uint8_t> data(static_cast<size_t>(nx) * ny * 4);
     uint32_t cores = std::max<int>(1, std::thread::hardware_concurrency());
     std::cout << "Num of threads: " << cores << "\n";
 
     vec3 lookfrom(13,2,3);
     vec3 lookat(0,0,0);
-    float dist_to_focus = 10.0;
-    float aperture = 0.1;
+    float dist_to_focus = 10.0f;
+    float aperture = 0.1f;
 
     Camera camera(lookfrom, lookat, vec3{0, 1, 0}, 45, float(nx)/float(ny), aperture, dist_to_focus);
 
-    HitableList world;
-    init_random_scene(world);
-    // world.add<Sphere>(vec3{0.f, -100.5f, -1.f}, 100.f, new Lambertian(vec3{0.8f, 0.8f, 0.0f}));
-    // world.add<Sphere>(vec3{-1.f, 0.f, -1.f}, 0.5f, new Metal(vec3{0.8f, 0.8f, 0.8f}, 0.3f));
-    // world.add<Sphere>(vec3{-1.f, 0.f, -1.f}, -0.45f, new Dielectric(1.5f));
-    // world.add<Sphere>(vec3{-1.f, 0.f, -1.f}, 0.5f, new Dielectric(1.5f));
-    // world.add<Sphere>(vec3{0.f, 0.f, -1.f}, 0.5f, new Lambertian(vec3{0.1f, 0.2f, 0.5f}));
-    // world.add<Sphere>(vec3{1.f, 0.f, -1.f}, 0.5f, new Metal(vec3{0.8f, 0.6f, 0.2f}, 1.0f));
+    HitableList world_list;
+    init_random_scene(world_list);
+    BVHNode world(world_list.list, 0, static_cast<int>(world_list.list.size()));
 
-    // std::cout << "P3\n" << nx << " " << ny  << "\n255\n";
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    const int CORES = 4;
+    const int CORES = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    std::cout << "Using " << CORES << " threads\n";
 
     int step = ny / CORES;
-    std::thread jobs[CORES];
+    std::vector<std::thread> jobs;
+    jobs.reserve(CORES);
     for (int i = 0; i < CORES; i++)
     {
-        jobs[i] = std::thread([&]
-        (int k)
+        int from  = i * step;
+        int count = (i == CORES - 1) ? (ny - from) : step;
+        jobs.emplace_back([&, from, count]()
         {
-            do_job(data, world, camera, k * step, step);
-        }, i);
+            do_job(data.data(), world, camera, from, count);
+        });
     }
 
-    for (int i = 0; i < CORES; i++)
+    for (auto & t : jobs)
     {
-        jobs[i].join();
+        t.join();
     }
 
-    flip(data, nx, ny, 4);
-    stbi_write_png("test.png", nx, ny, 4, data, nx * 4);
-    delete [] data;
+    flip(data.data(), nx, ny, 4);
+    stbi_write_png("test.png", nx, ny, 4, data.data(), nx * 4);
 
     std::chrono::steady_clock::time_point end= std::chrono::steady_clock::now();
     std::cout << "Time elapsed = " << std::chrono::duration_cast<std::chrono::seconds> (end - begin).count() <<std::endl;

@@ -15,9 +15,11 @@ PNG via `stb_image_write`. Rendering is parallelized across a fixed pool of thre
 src/                 All header-only ray tracer code plus main.cpp
   Vec.h              Templated Vec3<T>; `using vec3 = Vec3<float>`
   Ray.h              Templated Ray<T>; `using ray = Ray<float>`
-  Hitable.h          `Hitable` interface, `hit_record` POD
+  AABB.h             Axis-Aligned Bounding Box (`struct AABB`) + `surrounding_box()` helper
+  Hitable.h          `Hitable` interface, `hit_record` POD; includes AABB.h
   HitableList.h      Container of `Hitable::Ptr` (unique_ptr) with templated `add<T>(args...)`
-  Sphere.h           Sphere primitive; owns its `Material*` and deletes it in dtor
+  BVH.h              `BVHNode : Hitable`; builds BVH tree from a vector of hitables
+  Sphere.h           Sphere primitive; holds a `std::shared_ptr<Material>`
   Material.h         `Material` interface + `Lambertian`, `Metal`, `Dielectric`;
                      also defines free helpers `get_rand`, `random_in_unit_sphere`,
                      `reflect`, `refract`, `schlick`
@@ -48,9 +50,8 @@ Notes from `premake5.lua` worth knowing before touching it:
 - Workspace `RayTracing`, single project `RayTracing` (kind `ConsoleApp`, C++).
 - Build artifacts: `build/%{cfg.architecture}/bin/%{cfg.buildcfg}` and `obj/...`.
 - Project files generated into `proj/`.
-- The Debug/Release filters are **swapped** in the current config: `Release` defines
-  `DEBUG` with `symbols "On"`, and `Debug` defines `NDEBUG` with `optimize "On"`. Do
-  not "fix" this casually — preserve existing behavior unless the user asks.
+- `Debug` defines `DEBUG` with `symbols "On"`; `Release` defines `NDEBUG` with
+  `optimize "On"`.
 - `.gitignore` excludes `/build`, `*.d`, `*.o`, `*.exe`, `*.ppm`, `*.make`, `Makefile`.
 
 The renderer writes `test.png` to the current working directory (not into `output/`).
@@ -60,35 +61,40 @@ The `output/` directory holds curated reference images and is not the runtime ta
 
 Configuration lives as globals near the top of `main.cpp`:
 
-- `nx`, `ny` — image dimensions (currently 200×100; a 1920×1080 set is commented out).
-- `ns` — samples per pixel (currently 100).
-- `CORES` — fixed at 4 inside `main`; the printed `std::thread::hardware_concurrency()`
-  is informational only and is **not** used to size the thread pool.
+- `nx`, `ny` — image dimensions (currently 1024×768).
+- `ns` — samples per pixel (currently 50).
+- `CORES` — set to `std::thread::hardware_concurrency()` inside `main`; uses all
+  available hardware threads.
 - Camera position, FOV (45°), aperture (0.1), focus distance (10.0) are hardcoded in
   `main`.
 - Max ray bounce depth is hardcoded to 50 in `color()`.
 
-`MAXFLOAT` in `main.cpp` is set to `numeric_limits<short>::max()` (~32767). This is
-intentional in the existing code; do not silently change it.
+`T_MAX` in `main.cpp` is `numeric_limits<float>::max()` and is used as the upper
+bound for ray parameter `t` in world traversal. (The original name `MAXFLOAT`
+collides with a glibc macro from `<math.h>` and was renamed.)
 
 ## Architecture & Conventions
 
 ### Class structure
-- `Hitable` is the abstract base for scene primitives (`hit(...)` returns the closest
-  intersection in `[t_min, t_max]` via a `hit_record`).
+- `Hitable` is the abstract base for scene primitives. Two pure virtuals: `hit(...)`
+  returns the closest intersection in `[t_min, t_max]` via a `hit_record`, and
+  `bounding_box(AABB&)` returns the object's AABB.
 - `Material` is the abstract base for shading; `scatter` produces an outgoing ray and
   attenuation. The three concrete materials are `Lambertian`, `Metal`, `Dielectric`.
 - `HitableList::add<T>(args...)` perfect-forwards to `new T(...)` and stores in a
-  `vector<unique_ptr<Hitable>>`. Use this rather than constructing primitives directly.
+  `vector<unique_ptr<Hitable>>`. Use this to build scenes; the list is then consumed
+  by `BVHNode` construction.
+- `BVHNode` takes `std::vector<Hitable::Ptr>&` and **moves** all items into the tree.
+  After construction, the source vector contains nullptrs. The tree sorts objects by
+  alternating axes (x/y/z per depth level) for a balanced hierarchy.
 
-### Memory ownership (important, not idiomatic)
-- `Sphere` takes a raw `Material*` and **deletes it in its destructor**. Callers must
-  pass a freshly `new`'d material (see `init_random_scene`). Do not share a single
-  `Material*` across multiple `Sphere`s — that would double-free.
+### Memory ownership
+- `Sphere` holds a `std::shared_ptr<Material>`; construct via `std::make_shared<...>`
+  at call sites (see `init_random_scene`). `hit_record::material` is a non-owning raw
+  pointer obtained via `material.get()` inside `Sphere::hit`.
 - `HitableList` owns its hitables via `unique_ptr`.
-- The render buffer in `main` is `new uint8_t[...]` and `delete[]`'d manually.
-
-If refactoring ownership, preserve these invariants or update all call sites.
+- The render buffer in `main` is a `std::vector<uint8_t>`; pass `data.data()` to the
+  C-style consumers (`do_job`, `flip`, `stbi_write_png`).
 
 ### Naming
 - Types: `PascalCase` (`Sphere`, `Material`, `Camera`).
@@ -98,24 +104,29 @@ If refactoring ownership, preserve these invariants or update all call sites.
 - Headers use `#pragma once`.
 
 ### Style
-- Header-only definitions for small classes; inline keyword on hot accessors.
-- C++11/14 idioms: range-for, `auto`, `unique_ptr`, variadic templates.
-- Existing code mixes `float` and `double` literals and uses C-style `rand()` via
-  `get_rand()` in `Material.h` — match the surrounding style when editing.
+- Header-only definitions for small classes. Member functions defined out-of-class
+  inside headers (e.g. `Sphere::hit`, `HitableList::hit`) and free helpers in headers
+  must be marked `inline` to avoid ODR violations across translation units.
+- C++11/14 idioms: range-for, `auto`, `unique_ptr` / `shared_ptr`, variadic templates.
+- `get_rand()` uses a `thread_local` `std::mt19937` seeded from `std::random_device`,
+  with a `uniform_real_distribution<float>` over `[0, 1)`.
 
 ## Threading Model
 
-`main` partitions the image into `CORES` horizontal stripes of `ny / CORES` rows and
-spawns one `std::thread` per stripe running `do_job`. Each thread writes to disjoint
-rows of the shared `data` buffer, so no synchronization is needed. After joining, the
-buffer is flipped vertically (`flip`) before being passed to `stbi_write_png`.
+`main` partitions the image into `CORES` horizontal stripes and spawns one
+`std::thread` per stripe running `do_job`. `CORES` equals
+`std::thread::hardware_concurrency()`. The last thread receives any remainder rows
+(`ny - (CORES-1)*step`), so all rows are always rendered regardless of divisibility.
+Each thread writes to disjoint rows of the shared `data` buffer, so no synchronization
+is needed. After joining, the buffer is flipped vertically (`flip`) before being passed
+to `stbi_write_png`.
 
 Caveats to keep in mind when modifying:
-- `get_rand()` uses `rand()`, which is not thread-safe / well-distributed across
-  threads on all platforms. The existing code accepts this.
-- If `ny % CORES != 0`, the bottom rows are not rendered. Preserve divisibility or
-  fix the partitioning explicitly.
-- Materials are shared read-only across threads via `Sphere::material`.
+- `get_rand()` is thread-safe (per-thread `std::mt19937`). Output varies between runs
+  because each thread seeds from `std::random_device`.
+- `do_job` takes `const Hitable&`, not `HitableList&` — pass the `BVHNode` directly.
+- Materials are shared read-only across threads via `Sphere::material`
+  (`std::shared_ptr<Material>`).
 
 ## Working in This Repo
 

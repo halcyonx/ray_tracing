@@ -19,10 +19,10 @@ project "RayTracing"
         "src/**.cpp"
     }
 
-    filter "configurations:Release" 
+    filter "configurations:Debug"
         defines {"DEBUG"}
         symbols "On"
 
-    filter "configurations:Debug"
+    filter "configurations:Release"
         defines {"NDEBUG"}
         optimize "On"

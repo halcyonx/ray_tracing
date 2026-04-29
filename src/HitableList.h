@@ -15,11 +15,24 @@ public:
     }
 
     bool hit(const ray & r, float t_min, float t_max, hit_record & rec) const override;
+    bool bounding_box(AABB & box) const override;
 
     std::vector<Hitable::Ptr> list;
 };
 
-bool HitableList::hit(const ray & r, float t_min, float t_max, hit_record & rec) const
+inline bool HitableList::bounding_box(AABB & box) const
+{
+    if (list.empty()) return false;
+    AABB temp;
+    if (!list[0]->bounding_box(box)) return false;
+    for (size_t i = 1; i < list.size(); i++) {
+        if (!list[i]->bounding_box(temp)) return false;
+        box = surrounding_box(box, temp);
+    }
+    return true;
+}
+
+inline bool HitableList::hit(const ray & r, float t_min, float t_max, hit_record & rec) const
 {
     hit_record temp_rec;
     bool hit_anything = false;
